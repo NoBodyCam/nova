@@ -1,0 +1,22 @@
+# nova-rootwrap command filters for bare-metal compute nodes
+# This file should be owned by (and only-writeable by) the root user
+
+[Filters]
+# nova/virt/baremetal/tilera.py: 'mv', disk_path, image_path
+mv: CommandFilter, /bin/mv, root
+
+# nova/virt/baremetal/tilera.py: 'mount', '-o', 'loop', image_path, target_path,
+mount: CommandFilter, /bin/mount, root
+
+# nova/virt/baremetal/tilera.py: '/usr/sbin/rpc.mountd'
+rpc.mountd: CommandFilter, /usr/sbin/rpc.mountd, root
+
+# nova/virt/baremetal/tilera.py: 'umount', '-f', image_path
+umount: CommandFilter, /bin/umount, root
+
+# nova/virt/baremetal/tilera.py: 'rm', '-f', image_path
+# nova/virt/baremetal/tilera_pdu.py: 'rm', tile_output
+rm: CommandFilter, /bin/rm, root
+
+# nova/virt/baremetal/volume_driver.py: 'tgtadm', '--lld', 'iscsi', ...
+tgtadm: CommandFilter, /usr/sbin/tgtadm, root

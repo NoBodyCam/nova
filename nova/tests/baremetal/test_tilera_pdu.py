@@ -14,29 +14,33 @@
 #    under the License.
 
 """
-Tests for baremetal tilera driver.
+Tests for baremetal tilera_pdu driver.
 """
 
 import mox
 
-from nova import exception
 from nova import flags
 from nova import test
 
-from nova.virt.baremetal import tilera
+from nova.tests.baremetal.db import utils
+from nova.virt.baremetal import tilera_pdu
 
 FLAGS = flags.FLAGS
 
 
-class BaremetalTILERATestCase(test.TestCase):
+class BaremetalPduTestCase(test.TestCase):
 
-    def test_init(self):
-        self.flags(
-                tile_monitor="x",
-                )
-        tilera.TILERA()
+    def test_get_power_manager(self):
+        n1 = utils.new_bm_node(
+                pm_address='10.1.1.1',
+                id='1')
+        pm1 = tilera_pdu.Pdu(n1)
+        self.assertEqual(pm1._address, '10.1.1.1')
+        self.assertEqual(pm1._node_id, '1')
 
-        self.flags(
-                tile_monitor="",
-                )
-        self.assertRaises(exception.NovaException, tilera.TILERA)
+        n2 = utils.new_bm_node(
+                pm_address='10.2.2.2',
+                id='2')
+        pm2 = tilera_pdu.Pdu(n2)
+        self.assertEqual(pm2._address, '10.2.2.2')
+        self.assertEqual(pm2._node_id, '2')
