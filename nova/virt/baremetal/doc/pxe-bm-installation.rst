@@ -160,6 +160,15 @@ Set these flags in nova.conf::
 	scheduler_host_manager = nova.scheduler.baremetal_host_manager.BaremetalHostManager
 
 
+Deplyment Kernel/RAMDisk per Image
+----------------------------------
+
+You can also specify a deploymant kernel/ramdisk by Glance's properties; deploy_kernel_id and deploy_ramdisk_id. These properties take precidence over ones in nove.conf.
+
+Example: set the properties to an image (29b99aad-99b7-4e58-bd55-7640eb8ea9ae)::
+
+	$ glance image-update --property deploy_kernel_id=d76012fc-4055-485c-a978-f748679b89a9 --property deploy_ramdisk_id=e99775cb-f78d-401e-9d14-acd86e2f36e3 29b99aad-99b7-4e58-bd55-7640eb8ea9ae
+
 Baremetal Database
 ==================
 
