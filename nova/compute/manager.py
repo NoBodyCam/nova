@@ -73,6 +73,7 @@ from nova import quota
 from nova.scheduler import rpcapi as scheduler_rpcapi
 from nova import utils
 from nova.virt import driver
+from nova.virt import virtapi
 from nova import volume
 
 
@@ -209,10 +210,27 @@ def _get_image_meta(context, image_ref):
     return image_service.show(context, image_id)
 
 
+class ComputeVirtAPI(virtapi.VirtAPI):
+    def __init__(self, compute):
+        super(ComputeVirtAPI, self).__init__()
+        self._compute = compute
+
+    def instance_update(self, context, instance_uuid, updates):
+        return self._compute.db.instance_update_and_get_original(context,
+                                                                 instance_uuid,
+                                                                 updates)
+
+    def instance_get_by_uuid(self, context, instance_uuid):
+        return self._compute.db.instance_get_by_uuid(context, instance_uuid)
+
+    def instance_get_all_by_host(self, context, host):
+        return self._compute.db.instance_get_all_by_host(context, host)
+
+
 class ComputeManager(manager.SchedulerDependentManager):
     """Manages the running instances from creation to destruction."""
 
-    RPC_API_VERSION = '2.10'
+    RPC_API_VERSION = '2.11'
 
     def __init__(self, compute_driver=None, *args, **kwargs):
         """Load configuration options and connect to the hypervisor."""
@@ -225,10 +243,13 @@ class ComputeManager(manager.SchedulerDependentManager):
             LOG.error(_("Compute driver option required, but not specified"))
             sys.exit(1)
 
+        self.virtapi = ComputeVirtAPI(self)
+
         LOG.info(_("Loading compute driver '%s'") % compute_driver)
         try:
             self.driver = utils.check_isinstance(
-                    importutils.import_object_ns('nova.virt', compute_driver),
+                    importutils.import_object_ns('nova.virt', compute_driver,
+                                                 self.virtapi),
                     driver.ComputeDriver)
         except ImportError as e:
             LOG.error(_("Unable to load the virtualization driver: %s") % (e))
@@ -351,6 +372,13 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         self._report_driver_status(context)
         self.publish_service_capabilities(context)
+
+    def pre_start_hook(self):
+        """After the service is initialized, but before we fully bring
+        the service up by listening on RPC queues, make sure to update
+        our available resources.
+        """
+        self.update_available_resource(nova.context.get_admin_context())
 
     def _get_power_state(self, context, instance):
         """Retrieve the power state for the given instance."""
@@ -984,48 +1012,34 @@ class ComputeManager(manager.SchedulerDependentManager):
 
         do_terminate_instance(instance, bdms)
 
+    # NOTE(johannes): This is probably better named power_off_instance
+    # so it matches the driver method, but because of other issues, we
+    # can't use that name in grizzly.
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @reverts_task_state
     @wrap_instance_fault
     def stop_instance(self, context, instance):
-        """Stopping an instance on this host.
-
-        Alias for power_off_instance for compatibility"""
-        self.power_off_instance(context, instance=instance,
-                                final_state=vm_states.STOPPED)
-
-    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    @reverts_task_state
-    @wrap_instance_fault
-    def start_instance(self, context, instance):
-        """Starting an instance on this host.
-
-        Alias for power_on_instance for compatibility"""
-        self.power_on_instance(context, instance=instance)
-
-    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
-    @reverts_task_state
-    @wrap_instance_fault
-    def power_off_instance(self, context, instance,
-                           final_state=vm_states.SOFT_DELETED):
-        """Power off an instance on this host."""
+        """Stopping an instance on this host."""
         self._notify_about_instance_usage(context, instance, "power_off.start")
         self.driver.power_off(instance)
         current_power_state = self._get_power_state(context, instance)
         self._instance_update(context,
                               instance['uuid'],
                               power_state=current_power_state,
-                              vm_state=final_state,
+                              vm_state=vm_states.STOPPED,
                               expected_task_state=(task_states.POWERING_OFF,
                                                    task_states.STOPPING),
                               task_state=None)
         self._notify_about_instance_usage(context, instance, "power_off.end")
 
+    # NOTE(johannes): This is probably better named power_on_instance
+    # so it matches the driver method, but because of other issues, we
+    # can't use that name in grizzly.
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @reverts_task_state
     @wrap_instance_fault
-    def power_on_instance(self, context, instance):
-        """Power on an instance on this host."""
+    def start_instance(self, context, instance):
+        """Starting an instance on this host."""
         self._notify_about_instance_usage(context, instance, "power_on.start")
         self.driver.power_on(instance)
         current_power_state = self._get_power_state(context, instance)
@@ -1037,6 +1051,71 @@ class ComputeManager(manager.SchedulerDependentManager):
                               expected_task_state=(task_states.POWERING_ON,
                                                    task_states.STARTING))
         self._notify_about_instance_usage(context, instance, "power_on.end")
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @reverts_task_state
+    @wrap_instance_fault
+    def soft_delete_instance(self, context, instance):
+        """Soft delete an instance on this host."""
+        self._notify_about_instance_usage(context, instance,
+                                          "soft_delete.start")
+        try:
+            self.driver.soft_delete(instance)
+        except NotImplementedError:
+            # Fallback to just powering off the instance if the hypervisor
+            # doesn't implement the soft_delete method
+            self.driver.power_off(instance)
+        current_power_state = self._get_power_state(context, instance)
+        self._instance_update(context,
+                              instance['uuid'],
+                              power_state=current_power_state,
+                              vm_state=vm_states.SOFT_DELETED,
+                              expected_task_state=task_states.SOFT_DELETING,
+                              task_state=None)
+        self._notify_about_instance_usage(context, instance, "soft_delete.end")
+
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @reverts_task_state
+    @wrap_instance_fault
+    def restore_instance(self, context, instance):
+        """Restore a soft-deleted instance on this host."""
+        self._notify_about_instance_usage(context, instance, "restore.start")
+        try:
+            self.driver.restore(instance)
+        except NotImplementedError:
+            # Fallback to just powering on the instance if the hypervisor
+            # doesn't implement the restore method
+            self.driver.power_on(instance)
+        current_power_state = self._get_power_state(context, instance)
+        self._instance_update(context,
+                              instance['uuid'],
+                              power_state=current_power_state,
+                              vm_state=vm_states.ACTIVE,
+                              expected_task_state=task_states.RESTORING,
+                              task_state=None)
+        self._notify_about_instance_usage(context, instance, "restore.end")
+
+    # NOTE(johannes): In the folsom release, power_off_instance was poorly
+    # named. It was the main entry point to soft delete an instance. That
+    # has been changed to soft_delete_instance now, but power_off_instance
+    # will need to stick around for compatibility in grizzly.
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @reverts_task_state
+    @wrap_instance_fault
+    def power_off_instance(self, context, instance):
+        """Power off an instance on this host."""
+        self.soft_delete_instance(context, instance)
+
+    # NOTE(johannes): In the folsom release, power_on_instance was poorly
+    # named. It was the main entry point to restore a soft deleted instance.
+    # That has been changed to restore_instance now, but power_on_instance
+    # will need to stick around for compatibility in grizzly.
+    @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
+    @reverts_task_state
+    @wrap_instance_fault
+    def power_on_instance(self, context, instance):
+        """Power on an instance on this host."""
+        self.restore_instance(context, instance)
 
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @reverts_task_state
@@ -2083,7 +2162,8 @@ class ComputeManager(manager.SchedulerDependentManager):
     @exception.wrap_exception(notifier=notifier, publisher_id=publisher_id())
     @reverts_task_state
     @wrap_instance_fault
-    def reserve_block_device_name(self, context, instance, device, volume_id):
+    def reserve_block_device_name(self, context, instance, device,
+                                  volume_id=None):
 
         @lockutils.synchronized(instance['uuid'], 'nova-')
         def do_reserve():
@@ -2092,7 +2172,7 @@ class ComputeManager(manager.SchedulerDependentManager):
                                                                 device)
             # NOTE(vish): create bdm here to avoid race condition
             values = {'instance_uuid': instance['uuid'],
-                      'volume_id': volume_id,
+                      'volume_id': volume_id or 'reserved',
                       'device_name': result}
             self.db.block_device_mapping_create(context, values)
             return result

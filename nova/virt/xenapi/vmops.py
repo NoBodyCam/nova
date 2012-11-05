@@ -93,7 +93,7 @@ def cmp_version(a, b):
     return len(a) - len(b)
 
 
-def make_step_decorator(context, instance):
+def make_step_decorator(context, instance, instance_update):
     """Factory to create a decorator that records instance progress as a series
     of discrete steps.
 
@@ -125,7 +125,7 @@ def make_step_decorator(context, instance):
                          step_info['total'] * 100)
         LOG.debug(_("Updating progress to %(progress)d"), locals(),
                   instance=instance)
-        db.instance_update(context, instance['uuid'], {'progress': progress})
+        instance_update(context, instance['uuid'], {'progress': progress})
 
     def step_decorator(f):
         step_info['total'] += 1
@@ -145,9 +145,10 @@ class VMOps(object):
     """
     Management class for VM-related tasks
     """
-    def __init__(self, session):
+    def __init__(self, session, virtapi):
         self.compute_api = compute.API()
         self._session = session
+        self._virtapi = virtapi
         self.poll_rescue_last_ran = None
         self.firewall_driver = firewall.load_driver(
             default=DEFAULT_FIREWALL_DRIVER,
@@ -254,7 +255,8 @@ class VMOps(object):
         if name_label is None:
             name_label = instance['name']
 
-        step = make_step_decorator(context, instance)
+        step = make_step_decorator(context, instance,
+                                   self._virtapi.instance_update)
 
         @step
         def determine_disk_image_type_step(undo_mgr):
@@ -454,7 +456,8 @@ class VMOps(object):
 
         if instance['vm_mode'] != mode:
             # Update database with normalized (or determined) value
-            db.instance_update(context, instance['uuid'], {'vm_mode': mode})
+            self._virtapi.instance_update(context,
+                                          instance['uuid'], {'vm_mode': mode})
 
         vm_ref = vm_utils.create_vm(self._session, instance, name_label,
                                     kernel_file, ramdisk_file, use_pv_kernel)
@@ -463,7 +466,7 @@ class VMOps(object):
     def _attach_disks(self, instance, vm_ref, name_label, vdis,
                       disk_image_type):
         ctx = nova_context.get_admin_context()
-        instance_type = db.instance_type_get(ctx, instance['instance_type_id'])
+        instance_type = instance['instance_type']
 
         # DISK_ISO needs two VBDs: the ISO disk and a blank RW disk
         if disk_image_type == vm_utils.ImageType.DISK_ISO:
@@ -472,7 +475,7 @@ class VMOps(object):
 
             cd_vdi = vdis.pop('root')
             root_vdi = vm_utils.fetch_blank_disk(self._session,
-                                                 instance['instance_type_id'])
+                                                 instance_type['id'])
             vdis['root'] = root_vdi
 
             vm_utils.create_vbd(self._session, vm_ref, root_vdi['ref'],
@@ -567,8 +570,7 @@ class VMOps(object):
         agent.resetnetwork()
 
         # Set VCPU weight
-        inst_type = db.instance_type_get(ctx, instance['instance_type_id'])
-        vcpu_weight = inst_type['vcpu_weight']
+        vcpu_weight = instance['instance_type']['vcpu_weight']
         if vcpu_weight is not None:
             LOG.debug(_("Setting VCPU weight"), instance=instance)
             self._session.call_xenapi('VM.add_to_VCPUs_params', vm_ref,
@@ -661,7 +663,8 @@ class VMOps(object):
         progress = round(float(step) / total_steps * 100)
         LOG.debug(_("Updating progress to %(progress)d"), locals(),
                   instance=instance)
-        db.instance_update(context, instance['uuid'], {'progress': progress})
+        self._virtapi.instance_update(context, instance['uuid'],
+                                      {'progress': progress})
 
     def _migrate_disk_resizing_down(self, context, instance, dest,
                                     instance_type, vm_ref, sr_path):
@@ -1133,14 +1136,25 @@ class VMOps(object):
         self._release_bootlock(original_vm_ref)
         self._start(instance, original_vm_ref)
 
-    def power_off(self, instance):
-        """Power off the specified instance."""
+    def soft_delete(self, instance):
+        """Soft delete the specified instance."""
         try:
             vm_ref = self._get_vm_opaque_ref(instance)
-            vm_utils.shutdown_vm(self._session, instance, vm_ref, hard=True)
         except exception.NotFound:
-            LOG.warning(_("VM is not present, skipping power off..."),
+            LOG.warning(_("VM is not present, skipping soft delete..."),
                         instance=instance)
+        else:
+            vm_utils.shutdown_vm(self._session, instance, vm_ref, hard=True)
+
+    def restore(self, instance):
+        """Restore the specified instance."""
+        vm_ref = self._get_vm_opaque_ref(instance)
+        self._start(instance, vm_ref)
+
+    def power_off(self, instance):
+        """Power off the specified instance."""
+        vm_ref = self._get_vm_opaque_ref(instance)
+        vm_utils.shutdown_vm(self._session, instance, vm_ref, hard=True)
 
     def power_on(self, instance):
         """Power on the specified instance."""

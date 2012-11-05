@@ -26,6 +26,7 @@ import sys
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
+import nova.context
 from nova import db
 from nova import exception
 from nova import flags
@@ -42,7 +43,7 @@ from nova import quota
 LOG = logging.getLogger(__name__)
 
 scheduler_driver_opt = cfg.StrOpt('scheduler_driver',
-        default='nova.scheduler.multi.MultiScheduler',
+        default='nova.scheduler.filter_scheduler.FilterScheduler',
         help='Default driver to use for the scheduler')
 
 FLAGS = flags.FLAGS
@@ -54,13 +55,20 @@ QUOTAS = quota.QUOTAS
 class SchedulerManager(manager.Manager):
     """Chooses a host to run instances on."""
 
-    RPC_API_VERSION = '2.2'
+    RPC_API_VERSION = '2.3'
 
     def __init__(self, scheduler_driver=None, *args, **kwargs):
         if not scheduler_driver:
             scheduler_driver = FLAGS.scheduler_driver
         self.driver = importutils.import_object(scheduler_driver)
         super(SchedulerManager, self).__init__(*args, **kwargs)
+
+    def post_start_hook(self):
+        """After we start up and can receive messages via RPC, tell all
+        compute nodes to send us their capabilities.
+        """
+        ctxt = nova.context.get_admin_context()
+        compute_rpcapi.ComputeAPI().publish_service_capabilities(ctxt)
 
     def update_service_capabilities(self, context, service_name,
                                     host, capabilities):
@@ -72,14 +80,8 @@ class SchedulerManager(manager.Manager):
 
     def create_volume(self, context, volume_id, snapshot_id,
                       reservations=None, image_id=None):
-        try:
-            self.driver.schedule_create_volume(
-                context, volume_id, snapshot_id, image_id)
-        except Exception as ex:
-            with excutils.save_and_reraise_exception():
-                LOG.warning(_("Failed to schedule create_volume: %(ex)s") %
-                            locals())
-                db.volume_update(context, volume_id, {'status': 'error'})
+        #function removed in RPC API 2.3
+        pass
 
     def live_migration(self, context, instance, dest,
                        block_migration, disk_over_commit):
@@ -259,6 +261,3 @@ class SchedulerManager(manager.Manager):
     @manager.periodic_task
     def _expire_reservations(self, context):
         QUOTAS.expire(context)
-
-    def request_service_capabilities(self, context):
-        compute_rpcapi.ComputeAPI().publish_service_capabilities(context)
