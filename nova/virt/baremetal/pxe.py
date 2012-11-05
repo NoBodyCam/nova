@@ -56,6 +56,10 @@ pxe_opts = [
     cfg.StrOpt('baremetal_dnsmasq_lease_dir',
                default='$state_path/baremetal/dnsmasq',
                help='path to directory stores leasefiles of dnsmasq'),
+    cfg.StrOpt('baremetal_deploy_kernel',
+               help='kernel image ID used in deployment phase'),
+    cfg.StrOpt('baremetal_deploy_ramdisk',
+               help='ramdisk image ID used in deployment phase'),
     cfg.BoolOpt('baremetal_pxe_append_iscsi_portal',
                 default=True,
                 help='append "bm_iscsi_porttal=<portal_address>" '
@@ -389,11 +393,20 @@ class PXE(object):
         try:
             aki_id = str(instance['kernel_id'])
             ari_id = str(instance['ramdisk_id'])
-            deploy_aki_id = str(image_meta['properties']['deploy_kernel_id'])
-            deploy_ari_id = str(image_meta['properties']['deploy_ramdisk_id'])
         except KeyError as e:
             raise exception.NovaException(_('Can not activate baremetal '
                         'bootloader, %s is not defined') % e)
+        props = image_meta.get('properties', {})
+        deploy_aki_id = str(props.get('deploy_kernel_id',
+                                      FLAGS.baremetal_deploy_kernel))
+        if not deploy_aki_id:
+            raise exception.NovaException(_('Can not activate baremetal '
+                        'bootloader, %s is not defined') % 'deploy_kernel_id')
+        deploy_ari_id = str(props.get('deploy_ramdisk_id',
+                                      FLAGS.baremetal_deploy_ramdisk))
+        if not deploy_ari_id:
+            raise exception.NovaException(_('Can not activate baremetal '
+                        'bootloader, %s is not defined') % 'deploy_ramdisk_id')
 
         images = [(deploy_aki_id, 'deploy_kernel'),
                   (deploy_ari_id, 'deploy_ramdisk'),
@@ -440,7 +453,7 @@ class PXE(object):
         image_path = var['image_path']
 
         tftp_paths = self._put_tftp_images(context, instance, image_meta,
-                                            tftp_root)
+                                           tftp_root)
         LOG.debug("tftp_paths=%s", tftp_paths)
 
         pxe_config_dir = os.path.join(tftp_root, 'pxelinux.cfg')
