@@ -180,7 +180,7 @@ class TILERA(object):
         image_root = var['image_root']
         shutil.rmtree(image_root, ignore_errors=True)
 
-    def activate_bootloader(self, var, context, node, instance):
+    def activate_bootloader(self, var, context, node, instance, image_meta):
         tftp_root = var['tftp_root']
         image_root = var['image_root']
         disk_path = os.path.join(image_root, 'disk')
