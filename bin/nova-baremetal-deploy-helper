@@ -15,7 +15,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 #
-# cjk adding a litter better error messages
+# cjk adding a little better error messages
 
 """Starter script for Bare-Metal Deployment Service."""
 
