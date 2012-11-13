@@ -63,6 +63,7 @@ Using the Python WMI library:
 
 from nova.openstack.common import log as logging
 from nova.virt import driver
+from nova.virt.hyperv import hostops
 from nova.virt.hyperv import livemigrationops
 from nova.virt.hyperv import snapshotops
 from nova.virt.hyperv import vmops
@@ -72,9 +73,10 @@ LOG = logging.getLogger(__name__)
 
 
 class HyperVDriver(driver.ComputeDriver):
-    def __init__(self):
-        super(HyperVDriver, self).__init__()
+    def __init__(self, virtapi):
+        super(HyperVDriver, self).__init__(virtapi)
 
+        self._hostops = hostops.HostOps()
         self._volumeops = volumeops.VolumeOps()
         self._vmops = vmops.VMOps(self._volumeops)
         self._snapshotops = snapshotops.SnapshotOps()
@@ -121,15 +123,13 @@ class HyperVDriver(driver.ComputeDriver):
         pass
 
     def get_available_resource(self):
-        return self._vmops.get_available_resource()
+        return self._hostops.get_available_resource()
 
     def get_host_stats(self, refresh=False):
-        """See xenapi_conn.py implementation."""
-        return {}
+        return self._hostops.get_host_stats(refresh)
 
     def host_power_action(self, host, action):
-        """Reboots, shuts down or powers up the host."""
-        pass
+        return self._hostops.host_power_action(host, action)
 
     def set_host_enabled(self, host, enabled):
         """Sets the specified host's ability to accept new instances."""
@@ -175,6 +175,7 @@ class HyperVDriver(driver.ComputeDriver):
             instance_ref, network_info, block_migration)
 
     def check_can_live_migrate_destination(self, ctxt, instance,
+        src_compute_info, dst_compute_info,
         block_migration, disk_over_commit):
         pass
 

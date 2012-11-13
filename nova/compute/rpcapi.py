@@ -137,6 +137,8 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
         2.7 - Remove migration_id, add migration to confirm_resize
         2.8 - Remove migration_id, add migration to finish_resize
         2.9 - Add publish_service_capabilities()
+        2.10 - Adds filter_properties and request_spec to prep_resize()
+        2.11 - Adds soft_delete_instance() and restore_instance()
     '''
 
     #
@@ -343,13 +345,17 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
                 disk=disk), _compute_topic(self.topic, ctxt, host, None))
 
     def prep_resize(self, ctxt, image, instance, instance_type, host,
-                    reservations=None):
+                    reservations=None, request_spec=None,
+                    filter_properties=None):
         instance_p = jsonutils.to_primitive(instance)
         instance_type_p = jsonutils.to_primitive(instance_type)
         self.cast(ctxt, self.make_msg('prep_resize',
                 instance=instance_p, instance_type=instance_type_p,
-                image=image, reservations=reservations),
-                _compute_topic(self.topic, ctxt, host, None))
+                image=image, reservations=reservations,
+                request_spec=request_spec,
+                filter_properties=filter_properties),
+                _compute_topic(self.topic, ctxt, host, None),
+                version='2.10')
 
     def reboot_instance(self, ctxt, instance,
                         block_device_info, network_info, reboot_type):
@@ -513,8 +519,9 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
 
     def terminate_instance(self, ctxt, instance, bdms):
         instance_p = jsonutils.to_primitive(instance)
+        bdms_p = jsonutils.to_primitive(bdms)
         self.cast(ctxt, self.make_msg('terminate_instance',
-                instance=instance_p, bdms=bdms),
+                instance=instance_p, bdms=bdms_p),
                 topic=_compute_topic(self.topic, ctxt, None, instance),
                 version='2.4')
 
@@ -532,6 +539,18 @@ class ComputeAPI(nova.openstack.common.rpc.proxy.RpcProxy):
 
     def publish_service_capabilities(self, ctxt):
         self.fanout_cast(ctxt, self.make_msg('publish_service_capabilities'))
+
+    def soft_delete_instance(self, ctxt, instance):
+        instance_p = jsonutils.to_primitive(instance)
+        self.cast(ctxt, self.make_msg('soft_delete_instance',
+                instance=instance_p),
+                topic=_compute_topic(self.topic, ctxt, None, instance))
+
+    def restore_instance(self, ctxt, instance):
+        instance_p = jsonutils.to_primitive(instance)
+        self.cast(ctxt, self.make_msg('restore_instance',
+                instance=instance_p),
+                topic=_compute_topic(self.topic, ctxt, None, instance))
 
 
 class SecurityGroupAPI(nova.openstack.common.rpc.proxy.RpcProxy):

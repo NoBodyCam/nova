@@ -141,8 +141,8 @@ class BareMetalDriver(driver.ComputeDriver):
         "has_imagecache": True,
         }
 
-    def __init__(self, read_only=False):
-        super(BareMetalDriver, self).__init__()
+    def __init__(self, virtapi, read_only=False):
+        super(BareMetalDriver, self).__init__(virtapi)
 
         self.baremetal_nodes = importutils.import_object(
                 FLAGS.baremetal_driver)

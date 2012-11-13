@@ -30,6 +30,7 @@ from nova import db
 from nova import exception
 from nova.openstack.common import log as logging
 from nova.virt import driver
+from nova.virt import virtapi
 
 
 LOG = logging.getLogger(__name__)
@@ -52,7 +53,8 @@ class FakeDriver(driver.ComputeDriver):
 
     """Fake hypervisor driver"""
 
-    def __init__(self, read_only=False):
+    def __init__(self, virtapi, read_only=False):
+        super(FakeDriver, self).__init__(virtapi)
         self.instances = {}
         self.host_status = {
           'host_name-description': 'Fake Host',
@@ -140,6 +142,12 @@ class FakeDriver(driver.ComputeDriver):
         pass
 
     def power_on(self, instance):
+        pass
+
+    def soft_delete(self, instance):
+        pass
+
+    def restore(self, instance):
         pass
 
     def pause(self, instance):
@@ -277,6 +285,7 @@ class FakeDriver(driver.ComputeDriver):
         return
 
     def check_can_live_migrate_destination(self, ctxt, instance_ref,
+                                           src_compute_info, dst_compute_info,
                                            block_migration=False,
                                            disk_over_commit=False):
         return
@@ -328,3 +337,16 @@ class FakeDriver(driver.ComputeDriver):
 
     def get_volume_connector(self, instance):
         return {'ip': '127.0.0.1', 'initiator': 'fake', 'host': 'fakehost'}
+
+
+class FakeVirtAPI(virtapi.VirtAPI):
+    def instance_update(self, context, instance_uuid, updates):
+        return db.instance_update_and_get_original(context,
+                                                   instance_uuid,
+                                                   updates)
+
+    def instance_get_by_uuid(self, context, instance_uuid):
+        return db.instance_get_by_uuid(context, instance_uuid)
+
+    def instance_get_all_by_host(self, context, host):
+        return db.instance_get_all_by_host(context, host)

@@ -480,7 +480,11 @@ def service_update(context, service_id, values):
 
 ###################
 
-def compute_node_get(context, compute_id, session=None):
+def compute_node_get(context, compute_id):
+    return _compute_node_get(context, compute_id)
+
+
+def _compute_node_get(context, compute_id, session=None):
     result = model_query(context, models.ComputeNode, session=session).\
             filter_by(id=compute_id).\
             options(joinedload('service')).\
@@ -494,8 +498,8 @@ def compute_node_get(context, compute_id, session=None):
 
 
 @require_admin_context
-def compute_node_get_all(context, session=None):
-    return model_query(context, models.ComputeNode, session=session).\
+def compute_node_get_all(context):
+    return model_query(context, models.ComputeNode).\
             options(joinedload('service')).\
             options(joinedload('stats')).\
             all()
@@ -523,18 +527,14 @@ def _prep_stats_dict(values):
 
 
 @require_admin_context
-def compute_node_create(context, values, session=None):
+def compute_node_create(context, values):
     """Creates a new ComputeNode and populates the capacity fields
     with the most recent data."""
     _prep_stats_dict(values)
 
-    if not session:
-        session = get_session()
-
-    with session.begin(subtransactions=True):
-        compute_node_ref = models.ComputeNode()
-        session.add(compute_node_ref)
-        compute_node_ref.update(values)
+    compute_node_ref = models.ComputeNode()
+    compute_node_ref.update(values)
+    compute_node_ref.save()
     return compute_node_ref
 
 
@@ -581,20 +581,19 @@ def compute_node_update(context, compute_id, values, prune_stats=False):
     session = get_session()
     with session.begin(subtransactions=True):
         _update_stats(context, stats, compute_id, session, prune_stats)
-        compute_ref = compute_node_get(context, compute_id, session=session)
+        compute_ref = _compute_node_get(context, compute_id, session=session)
         compute_ref.update(values)
     return compute_ref
 
 
 def compute_node_get_by_host(context, host):
     """Get all capacity entries for the given host."""
-    session = get_session()
-    with session.begin():
-        node = session.query(models.ComputeNode).\
-                             join('service').\
-                             filter(models.Service.host == host).\
-                             filter_by(deleted=False)
-        return node.first()
+    result = model_query(context, models.ComputeNode).\
+            join('service').\
+            filter(models.Service.host == host).\
+            filter_by(deleted=False).\
+            first()
+    return result
 
 
 def compute_node_statistics(context):
@@ -838,11 +837,17 @@ def floating_ip_destroy(context, address):
 def floating_ip_disassociate(context, address):
     session = get_session()
     with session.begin():
-        floating_ip_ref = floating_ip_get_by_address(context,
-                                                     address,
-                                                     session=session)
-        fixed_ip_ref = fixed_ip_get(context,
-                                    floating_ip_ref['fixed_ip_id'])
+        floating_ip_ref = model_query(context,
+                                      models.FloatingIp,
+                                      session=session).\
+                            filter_by(address=address).\
+                            first()
+        if not floating_ip_ref:
+            raise exception.FloatingIpNotFoundForAddress(address=address)
+
+        fixed_ip_ref = model_query(context, models.FixedIp, session=session).\
+                            filter_by(id=floating_ip_ref['fixed_ip_id']).\
+                            first()
         if fixed_ip_ref:
             fixed_ip_address = fixed_ip_ref['address']
         else:
@@ -1157,8 +1162,8 @@ def fixed_ip_disassociate_all_by_timeout(context, host, time):
 
 
 @require_context
-def fixed_ip_get(context, id, session=None):
-    result = model_query(context, models.FixedIp, session=session).\
+def fixed_ip_get(context, id):
+    result = model_query(context, models.FixedIp).\
                      filter_by(id=id).\
                      first()
     if not result:
@@ -1168,8 +1173,7 @@ def fixed_ip_get(context, id, session=None):
     # results?
     if is_user_context(context) and result['instance_uuid'] is not None:
         instance = instance_get_by_uuid(context.elevated(read_deleted='yes'),
-                                        result['instance_uuid'],
-                                        session)
+                                        result['instance_uuid'])
         authorize_project_context(context, instance.project_id)
 
     return result
@@ -2565,14 +2569,16 @@ def quota_usage_create(context, project_id, resource, in_use, reserved,
 
 
 @require_admin_context
-def quota_usage_update(context, project_id, resource, in_use, reserved,
-                       until_refresh, session=None):
+def quota_usage_update(context, project_id, resource, session=None, **kwargs):
     def do_update(session):
         quota_usage_ref = quota_usage_get(context, project_id, resource,
                                           session=session)
-        quota_usage_ref.in_use = in_use
-        quota_usage_ref.reserved = reserved
-        quota_usage_ref.until_refresh = until_refresh
+        if 'in_use' in kwargs:
+            quota_usage_ref.in_use = kwargs['in_use']
+        if 'reserved' in kwargs:
+            quota_usage_ref.reserved = kwargs['reserved']
+        if 'until_refresh' in kwargs:
+            quota_usage_ref.until_refresh = kwargs['until_refresh']
         quota_usage_ref.save(session=session)
 
     if session:
@@ -3417,7 +3423,7 @@ def _security_group_get_query(context, session=None, read_deleted=None,
     query = model_query(context, models.SecurityGroup, session=session,
             read_deleted=read_deleted, project_only=project_only)
     if join_rules:
-        query = query.options(joinedload_all('rules'))
+        query = query.options(joinedload_all('rules.grantee_group'))
     return query
 
 
@@ -3474,7 +3480,7 @@ def security_group_get_by_name(context, project_id, group_name,
             filter_by(name=group_name)
 
     if columns_to_join is None:
-        columns_to_join = ['instances', 'rules']
+        columns_to_join = ['instances', 'rules.grantee_group']
 
     for column in columns_to_join:
         query = query.options(joinedload_all(column))

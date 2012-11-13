@@ -41,7 +41,7 @@ opts = [
                default=None,
                help='path to baremetal terminal SSL cert(PEM)'),
     cfg.StrOpt('baremetal_term_pid_dir',
-               default='/var/lib/nova/baremetal/console',
+               default='$state_path/baremetal/console',
                help='path to directory stores pidfiles of baremetal_term'),
     cfg.IntOpt('baremetal_ipmi_power_retry',
                default=3,
@@ -87,9 +87,10 @@ def _console_pid(node_id):
 def _stop_console(node_id):
     console_pid = _console_pid(node_id)
     if console_pid:
-        utils.execute('kill', str(console_pid),
+        # Allow exitcode 99 (RC_UNAUTHORIZED)
+        utils.execute('kill', '-TERM', str(console_pid),
                       run_as_root=True,
-                      check_exit_code=False)
+                      check_exit_code=[0, 99])
     bm_utils.unlink_without_raise(_console_pidfile(node_id))
 
 
@@ -195,8 +196,8 @@ class Ipmi(object):
 
         ipmi_args = "/:%(uid)s:%(gid)s:HOME:ipmitool -H %(address)s" \
                     " -I lanplus -U %(user)s -f %(pwfile)s sol activate" \
-                    % {'uid': str(os.getuid()),
-                       'gid': str(os.getgid()),
+                    % {'uid': os.getuid(),
+                       'gid': os.getgid(),
                        'address': self._address,
                        'user': self._user,
                        'pwfile': pwfile,

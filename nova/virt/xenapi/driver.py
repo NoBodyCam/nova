@@ -125,8 +125,8 @@ FLAGS.register_opts(xenapi_opts)
 class XenAPIDriver(driver.ComputeDriver):
     """A connection to XenServer or Xen Cloud Platform"""
 
-    def __init__(self, read_only=False):
-        super(XenAPIDriver, self).__init__()
+    def __init__(self, virtapi, read_only=False):
+        super(XenAPIDriver, self).__init__(virtapi)
 
         url = FLAGS.xenapi_connection_url
         username = FLAGS.xenapi_connection_username
@@ -140,8 +140,8 @@ class XenAPIDriver(driver.ComputeDriver):
         self._session = XenAPISession(url, username, password)
         self._volumeops = volumeops.VolumeOps(self._session)
         self._host_state = None
-        self._host = host.Host(self._session)
-        self._vmops = vmops.VMOps(self._session)
+        self._host = host.Host(self._session, self.virtapi)
+        self._vmops = vmops.VMOps(self._session, self.virtapi)
         self._initiator = None
         self._hypervisor_hostname = None
         self._pool = pool.ResourcePool(self._session)
@@ -281,6 +281,14 @@ class XenAPIDriver(driver.ComputeDriver):
     def power_on(self, instance):
         """Power on the specified instance"""
         self._vmops.power_on(instance)
+
+    def soft_delete(self, instance):
+        """Soft delete the specified instance"""
+        self._vmops.soft_delete(instance)
+
+    def restore(self, instance):
+        """Restore the specified instance"""
+        self._vmops.restore(instance)
 
     def poll_rebooting_instances(self, timeout):
         """Poll for rebooting instances"""
@@ -423,6 +431,7 @@ class XenAPIDriver(driver.ComputeDriver):
         return
 
     def check_can_live_migrate_destination(self, ctxt, instance_ref,
+                src_compute_info, dst_compute_info,
                 block_migration=False, disk_over_commit=False):
         """Check if it is possible to execute live migration.
 

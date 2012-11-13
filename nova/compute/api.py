@@ -33,6 +33,7 @@ from nova.compute import instance_types
 from nova.compute import power_state
 from nova.compute import rpcapi as compute_rpcapi
 from nova.compute import task_states
+from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.consoleauth import rpcapi as consoleauth_rpcapi
 from nova import crypto
@@ -280,7 +281,7 @@ class API(base.Base):
             and the fixed IP address for each network provided is within
             same the network block
         """
-        if requested_networks is None:
+        if not requested_networks:
             return
 
         self.network_api.validate_networks(context, requested_networks)
@@ -836,11 +837,11 @@ class API(base.Base):
         # no daemon to reclaim, so delete it immediately.
         if instance['host']:
             instance = self.update(context, instance,
-                                   task_state=task_states.POWERING_OFF,
+                                   task_state=task_states.SOFT_DELETING,
                                    expected_task_state=None,
                                    deleted_at=timeutils.utcnow())
 
-            self.compute_rpcapi.power_off_instance(context, instance)
+            self.compute_rpcapi.soft_delete_instance(context, instance)
         else:
             LOG.warning(_('No host for instance, deleting immediately'),
                         instance=instance)
@@ -912,24 +913,24 @@ class API(base.Base):
                             host=src_host, cast=False,
                             reservations=downsize_reservations)
 
-            services = self.db.service_get_all_compute_by_host(
-                    context.elevated(), instance['host'])
             is_up = False
             bdms = self.db.block_device_mapping_get_all_by_instance(
                 context, instance["uuid"])
             #Note(jogo): db allows for multiple compute services per host
+            try:
+                services = self.db.service_get_all_compute_by_host(
+                        context.elevated(), instance['host'])
+            except exception.ComputeHostNotFound:
+                services = []
             for service in services:
                 if utils.service_is_up(service):
                     is_up = True
                     self.compute_rpcapi.terminate_instance(context, instance,
                                                            bdms)
                     break
-            if is_up == False:
+            if not is_up:
                 # If compute node isn't up, just delete from DB
-                LOG.warning(_('host for instance is down, deleting from '
-                        'database'), instance=instance)
-                self.db.instance_destroy(context, instance['uuid'])
-
+                self._local_delete(context, instance, bdms)
             if reservations:
                 QUOTAS.commit(context, reservations)
         except exception.InstanceNotFound:
@@ -940,6 +941,45 @@ class API(base.Base):
             with excutils.save_and_reraise_exception():
                 if reservations:
                     QUOTAS.rollback(context, reservations)
+
+    def _local_delete(self, context, instance, bdms):
+        LOG.warning(_('host for instance is down, deleting from '
+                      'database'), instance=instance)
+        instance_uuid = instance['uuid']
+        self.db.instance_info_cache_delete(context, instance_uuid)
+        compute_utils.notify_about_instance_usage(
+            context, instance, "delete.start")
+
+        elevated = context.elevated()
+        self.network_api.deallocate_for_instance(elevated,
+                instance)
+        self.db.instance_destroy(context, instance_uuid)
+        system_meta = self.db.instance_system_metadata_get(context,
+                instance_uuid)
+
+        # cleanup volumes
+        for bdm in bdms:
+            if bdm['volume_id']:
+                volume = self.volume_api.get(context, bdm['volume_id'])
+                # NOTE(vish): We don't have access to correct volume
+                #             connector info, so just pass a fake
+                #             connector. This can be improved when we
+                #             expose get_volume_connector to rpc.
+                connector = {'ip': '127.0.0.1', 'initiator': 'iqn.fake'}
+                self.volume_api.terminate_connection(context,
+                                                     volume,
+                                                     connector)
+                self.volume_api.detach(elevated, volume)
+                if bdm['delete_on_termination']:
+                    self.volume_api.delete(context, volume)
+            self.db.block_device_mapping_destroy(context, bdm['id'])
+        instance = self._instance_update(context,
+                                         instance_uuid,
+                                         vm_state=vm_states.DELETED,
+                                         task_state=None,
+                                         terminated_at=timeutils.utcnow())
+        compute_utils.notify_about_instance_usage(
+            context, instance, "delete.end", system_metadata=system_meta)
 
     # NOTE(maoy): we allow delete to be called no matter what vm_state says.
     @wrap_check_policy
@@ -961,10 +1001,10 @@ class API(base.Base):
         """Restore a previously deleted (but not reclaimed) instance."""
         if instance['host']:
             instance = self.update(context, instance,
-                        task_state=task_states.POWERING_ON,
+                        task_state=task_states.RESTORING,
                         expected_task_state=None,
                         deleted_at=None)
-            self.compute_rpcapi.power_on_instance(context, instance)
+            self.compute_rpcapi.restore_instance(context, instance)
         else:
             self.update(context,
                         instance,
@@ -990,7 +1030,7 @@ class API(base.Base):
         LOG.debug(_("Going to try to stop instance"), instance=instance)
 
         instance = self.update(context, instance,
-                    task_state=task_states.STOPPING,
+                    task_state=task_states.POWERING_OFF,
                     expected_task_state=None,
                     progress=0)
 
@@ -1004,7 +1044,7 @@ class API(base.Base):
         LOG.debug(_("Going to try to start instance"), instance=instance)
 
         instance = self.update(context, instance,
-                               task_state=task_states.STARTING,
+                               task_state=task_states.POWERING_ON,
                                expected_task_state=None)
 
         # TODO(yamahata): injected_files isn't supported right now.
@@ -1379,7 +1419,7 @@ class API(base.Base):
                 if cinfo and 'serial' not in cinfo:
                     cinfo['serial'] = bdm['volume_id']
                 bdmap = {'connection_info': cinfo,
-                         'mount_device': bdm['volume_id'],
+                         'mount_device': bdm['device_name'],
                          'delete_on_termination': bdm['delete_on_termination']}
                 block_device_mapping.append(bdmap)
             except TypeError:

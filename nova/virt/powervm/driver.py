@@ -18,7 +18,6 @@ from nova.compute import task_states
 from nova.compute import vm_states
 
 from nova import context as nova_context
-from nova import db
 from nova import flags
 
 from nova.openstack.common import cfg
@@ -59,8 +58,8 @@ class PowerVMDriver(driver.ComputeDriver):
 
     """PowerVM Implementation of Compute Driver."""
 
-    def __init__(self):
-        super(PowerVMDriver, self).__init__()
+    def __init__(self, virtapi):
+        super(PowerVMDriver, self).__init__(virtapi)
         self._powervm = operator.PowerVMOperator()
 
     @property
@@ -70,20 +69,7 @@ class PowerVMDriver(driver.ComputeDriver):
     def init_host(self, host):
         """Initialize anything that is necessary for the driver to function,
         including catching up with currently running VM's on the given host."""
-        context = nova_context.get_admin_context()
-        instances = db.instance_get_all_by_host(context, host)
-        powervm_instances = self.list_instances()
-        # Looks for db instances that don't exist on the host side
-        # and cleanup the inconsistencies.
-        for db_instance in instances:
-            task_state = db_instance['task_state']
-            if db_instance['name'] in powervm_instances:
-                continue
-            if task_state in [task_states.DELETING, task_states.SPAWNING]:
-                db.instance_update(context, db_instance['uuid'],
-                                   {'vm_state': vm_states.DELETED,
-                                    'task_state': None})
-                db.instance_destroy(context, db_instance['uuid'])
+        pass
 
     def get_info(self, instance):
         """Get the current status of an instance."""
