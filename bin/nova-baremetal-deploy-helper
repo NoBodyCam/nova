@@ -42,6 +42,7 @@ import socket
 import stat
 from wsgiref import simple_server
 
+from nova import config
 from nova import context as nova_context
 from nova import flags
 from nova.openstack.common import log as logging
@@ -49,7 +50,7 @@ from nova import utils
 from nova.virt.baremetal import db
 
 
-flags.parse_args(sys.argv)
+config.parse_args(sys.argv)
 logging.setup("nova")
 
 LOG = logging.getLogger('nova.virt.baremetal.deploy_server')
@@ -240,25 +241,42 @@ class BareMetalDeploy(object):
 
     def __call__(self, environ, start_response):
         method = environ['REQUEST_METHOD']
+        return_txt=''
         if method == 'POST':
             #return self.post(environ, start_response)
-            action_result = self.post(environ, start_response)
+            get_param_result = self.get_param_post(environ, start_response)
         else:
             #start_response('501 Not Implemented',
             #               [('Content-type', 'text/plain')])
             #return 'Not Implemented'
-            action_result = self.get(environ, start_response)
+            get_param_result = self.get_param_get(environ, start_response)
 
-        if not action_result:
-            start_response('200 OK', [('Content-type', 'text/plain')])
-            return ''
-        else: 
-            start_response(_('501 Error: %s') % action_result,
-                           [('Content-type', 'text/plain')])
-            return 'Error'
+        # lets see if we are a deployment request or 
+        # a discovery result
+        discovery_flag = self.check_for_discovery(get_param_restult)
+        if discovery_flag:
+            # this ia a hw discovery ping of information
+            LOG.info("HW Discovery ping")
+        else:
+            LOG.info("deployment request")
+            param_chk = self.validate_deployment(get_param_result)
+            if param_chk:
+                start_response(_('501 Error: %s') % param_chk,
+                               [('Content-type', 'text/plain')])
+                return_txt='Error'
+            else:
+                action_response = self.setup_deployment(q)
 
+            if not action_response:
+                start_response('200 OK', [('Content-type', 'text/plain')])
+            else: 
+                start_response(_('501 Error: %s') % action_response,
+                               [('Content-type', 'text/plain')])
+                return_txt='Error'
 
-    def post(self, environ, start_response):
+        return return_txt
+
+    def get_param_post(self, environ, start_response):
         LOG.info("post: environ=%s", environ)
         inpt = environ['wsgi.input']
         length = int(environ.get('CONTENT_LENGTH', 0))
@@ -266,29 +284,26 @@ class BareMetalDeploy(object):
         x = inpt.read(length)
         q = dict(cgi.parse_qsl(x))
 
-        param_chk = self.validate_q(q)
-        if param_chk:
-            return param_chk
+        return q
 
-        deploy_response = self.setup_deployment(q)
-
-        return deploy_response
-
-
-    def get(self, environ, start_response):
+    def get_param_get(self, environ, start_response):
         # cjk adding get support
         LOG.info("Get: environ=%s", environ)
         q = parse_qs(environ['QUERY_STRING'])
-            
-        param_chk = self.validate_q(q)
-        if param_chk:
-            return param_chk
+        
+        return q
 
-        deploy_response = self.setup_deployment(q)
+    def check_for_discovery(self, q):
+        # check for hardware discovery flag
+        return_value = ''
 
-        return deploy_response
+        if q.get('HWDiscovery', ['error'])  == 'error':
+            return_value = False
+        else:
+        	   return_value = True
+        return return_value
 
-    def validate_q(self, q):
+    def validate_deployment(self, q):
         # validate we got the values we think we did
         #i=$DEPLOYMENT_ID&k=$DEPLOYMENT_KEY&a=$BOOT_IP_ADDRESS&n=$ISCSI_TARGET_IQN
         return_value = ''
