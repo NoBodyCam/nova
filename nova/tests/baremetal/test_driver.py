@@ -69,11 +69,11 @@ def class_path(class_):
 COMMON_FLAGS = dict(
     baremetal_sql_connection='sqlite:///:memory:',
     baremetal_driver='nova.virt.baremetal.fake.Fake',
-    power_manager='nova.virt.baremetal.fake.FakePowerManager',
+    baremetal_power_manager='nova.virt.baremetal.fake.FakePowerManager',
     baremetal_vif_driver=class_path(FakeVifDriver),
     firewall_driver=class_path(FakeFirewallDriver),
     baremetal_volume_driver=class_path(FakeVolumeDriver),
-    instance_type_extra_specs=['cpu_arch:test'],
+    baremetal_instance_type_extra_specs=['cpu_arch:test'],
     host=NODE['service_host'],
 )
 
@@ -184,9 +184,12 @@ class BaremetalDriverTestCase(test_virt_drivers._VirtDriverTestCase):
         self.assertTrue(isinstance(drv._volume_driver, FakeVolumeDriver))
 
     def test_get_host_stats(self):
-        self.flags(instance_type_extra_specs=['cpu_arch:x86_64',
-                                              'x:123',
-                                              'y:456', ])
+        self.flags(
+              baremetal_instance_type_extra_specs=[
+                 'cpu_arch:x86_64',
+                 'x:123',
+                 'y:456',
+                 ])
         drv = bm_driver.BareMetalDriver(None)
         cap_list = drv.get_host_stats()
         self.assertTrue(isinstance(cap_list, list))

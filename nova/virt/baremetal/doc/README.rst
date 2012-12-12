@@ -40,11 +40,18 @@ Additional setting for bare-metal provisioning [nova.conf]
 
   # baremetal compute driver
   compute_driver = nova.virt.baremetal.driver.BareMetalDriver
-  baremetal_driver = {nova.virt.baremetal.tilera.TILERA | nova.virt.baremetal.pxe.PXE}
-  power_manager = {nova.virt.baremetal.tilera_pdu.Pdu | nova.virt.baremetal.ipmi.Ipmi}
+  baremetal_driver = { nova.virt.baremetal.tilera.TILERA
+                     | nova.virt.baremetal.pxe.PXE }
 
-  # instance_type_extra_specs this baremetal compute
-  instanse_type_extra_specs = cpu_arch:{tilepro64 | x86_64 | arm}
+  # baremetal power manager
+  # in test environments, it may be desirable to use a fake power driver
+  baremetal_power_manager = { nova.virt.baremetal.tilera_pdu.Pdu
+                            | nova.virt.baremetal.ipmi.Ipmi
+                            | nova.virt.baremetal.fake.FakePowerManager }
+
+  # CPU architecture which this baremetal compute should advertise to nova scheduler
+  # values are arbitrary but must match flavor extra_specs{'cpu_arch'}
+  baremetal_instance_type_extra_specs = cpu_arch:{i386 | x86_64 | tilepro64 | arm}
 
   # TFTP root
   baremetal_tftp_root = /tftpboot

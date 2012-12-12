@@ -46,16 +46,16 @@ opts = [
     cfg.StrOpt('baremetal_volume_driver',
                default='nova.virt.baremetal.volume_driver.LibvirtVolumeDriver',
                help='Baremetal volume driver.'),
-    cfg.ListOpt('instance_type_extra_specs',
+    cfg.ListOpt('baremetal_instance_type_extra_specs',
                default=[],
                help='a list of additional capabilities corresponding to '
-               'instance_type_extra_specs for this compute '
-               'host to advertise. Valid entries are name=value, pairs '
+               'instance_type_extra_specs for this compute host to advertise. '
+               'Specify values as comma-separated key:value pairs. '
                'For example, "key1:val1, key2:val2"'),
     cfg.StrOpt('baremetal_driver',
                default='nova.virt.baremetal.pxe.PXE',
                help='Baremetal driver back-end (pxe or tilera)'),
-    cfg.StrOpt('power_manager',
+    cfg.StrOpt('baremetal_power_manager',
                default='nova.virt.baremetal.ipmi.Ipmi',
                help='Baremetal power management method'),
     cfg.StrOpt('baremetal_tftp_root',
@@ -100,7 +100,7 @@ def _update_baremetal_state(context, node, instance, state):
 
 
 def get_power_manager(node, **kwargs):
-    cls = importutils.import_class(CONF.power_manager)
+    cls = importutils.import_class(CONF.baremetal_power_manager)
     return cls(node, **kwargs)
 
 
@@ -126,14 +126,14 @@ class BareMetalDriver(driver.ComputeDriver):
 
         extra_specs = {}
         extra_specs["baremetal_driver"] = CONF.baremetal_driver
-        for pair in CONF.instance_type_extra_specs:
+        for pair in CONF.baremetal_instance_type_extra_specs:
             keyval = pair.split(':', 1)
             keyval[0] = keyval[0].strip()
             keyval[1] = keyval[1].strip()
             extra_specs[keyval[0]] = keyval[1]
         if not 'cpu_arch' in extra_specs:
-            LOG.warning(
-                    _('cpu_arch is not found in instance_type_extra_specs'))
+            LOG.warning(_('cpu_arch not found in '
+                          'baremetal_instance_type_extra_specs'))
             extra_specs['cpu_arch'] = ''
         self._extra_specs = extra_specs
 
