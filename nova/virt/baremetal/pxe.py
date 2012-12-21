@@ -66,6 +66,9 @@ pxe_opts = [
                      'to instances\' /proc/cmdline'),
     cfg.StrOpt('baremetal_pxe_append_params',
                help='additional append parameters for baremetal pxe'),
+    cfg.StrOpt('baremetal_pxe_cfg_template',
+               default='$pybasedir/nova/virt/baremetal/pxe_boot_cfg.template',
+               help='Template file for tftp pxe boot'),
             ]
 
 CONF = cfg.CONF
@@ -135,38 +138,28 @@ def _build_pxe_config(deployment_id, deployment_key, deployment_iscsi_iqn,
                       iscsi_portal):
     # nova-baremetal-deploy-helper will change 'default deploy'
     # to 'default boot' after the image deployment is complete
-    pxeconf = "default deploy\n"
-    pxeconf += "\n"
-
-    pxeconf += "label deploy\n"
-    pxeconf += "kernel %s\n" % deployment_aki_path
-    pxeconf += "append"
-    pxeconf += " initrd=%s" % deployment_ari_path
-    pxeconf += " selinux=0"
-    pxeconf += " disk=cciss/c0d0,sda,hda,vda"
-    pxeconf += " iscsi_target_iqn=%s" % deployment_iscsi_iqn
-    pxeconf += " deployment_id=%s" % deployment_id
-    pxeconf += " deployment_key=%s" % deployment_key
-    if CONF.baremetal_pxe_append_params:
-        pxeconf += " %s" % CONF.baremetal_pxe_append_params
-    pxeconf += "\n"
-    pxeconf += "ipappend 3\n"
-    pxeconf += "\n"
-
-    pxeconf += "label boot\n"
-    pxeconf += "kernel %s\n" % aki_path
-    pxeconf += "append"
-    pxeconf += " initrd=%s" % ari_path
-    # nova-baremetal-deploy-helper will set ${ROOT} to proper UUID
-    pxeconf += " root=${ROOT} ro"
-    if iscsi_portal:
-        pxeconf += ' bm_iscsi_portal=%s' % iscsi_portal
-    if CONF.baremetal_pxe_append_params:
-        pxeconf += " %s" % CONF.baremetal_pxe_append_params
-    pxeconf += "\n"
-    pxeconf += "\n"
+    LOG.info("Starting Build pxe config")
+    pxe_conf_options = {'deployment_aki_path': deployment_aki_path,
+                'deployment_ari_path': deployment_ari_path,
+                'deployment_iscsi_iqn': deployment_iscsi_iqn,
+                'deployment_id': deployment_id,
+                'deployment_key': deployment_key,
+                'baremetal_pxe_append_params': CONF.baremetal_pxe_append_params,
+                'aki_path': aki_path,
+                'ari_path': ari_path,
+                'bm_iscsi_portal': iscsi_portal,
+                }
+    LOG.info("options array build")
+    pxe_template = open(CONF.baremetal_pxe_cfg_template).read()
+    LOG.info("pxe template loaded")
+    _late_load_cheetah()
+    pxeconf = str(Template(pxe_template,
+                       searchList=[{'pxe_options': pxe_conf_options,
+                                    'iscsiportal': iscsi_portal,
+                                    'ROOT': '${ROOT}',
+                                    }]))
+    LOG.info("returning config")
     return pxeconf
-
 
 def _start_per_host_pxe_server(tftp_root, vlan_id,
                                server_address, client_address):
